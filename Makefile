@@ -2,7 +2,7 @@ BINARY := riffle
 GO := go
 GOFLAGS := -trimpath
 
-.PHONY: build test fetch-model clean-bin
+.PHONY: build test fetch-model clean-bin build-release build-darwin-arm64 build-darwin-amd64 build-linux-amd64 build-linux-arm64
 
 build: fetch-model
 	$(GO) build $(GOFLAGS) -o $(BINARY) .
