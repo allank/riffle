@@ -1,0 +1,6 @@
+riffle
+riffle-*
+internal/embedder/model/model.onnx
+internal/tokenizer/data/tokenizer.json
+*.bin.tmp
+.riffle/
