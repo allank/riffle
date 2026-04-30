@@ -4,3 +4,19 @@ internal/embedder/model/model.onnx
 internal/tokenizer/data/tokenizer.json
 *.bin.tmp
 .riffle/
+
+# Go test binaries
+*.test
+
+# CGo artifacts
+*.so
+*.dylib
+*.a
+*.o
+*.out
+
+# Vendor
+vendor/
+
+# macOS
+.DS_Store
