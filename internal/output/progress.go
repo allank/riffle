@@ -46,7 +46,7 @@ func StartProgress(w io.Writer, root string, exts []string, total int, start tim
 			fmt.Fprintf(w, "\033[%dA\r\033[J", linesWritten)
 		}
 		fmt.Fprint(w, text)
-		linesWritten = strings.Count(text, "\n") + 1
+		linesWritten = strings.Count(text, "\n")
 	}
 
 	go func() {
