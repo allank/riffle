@@ -100,13 +100,22 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	var nextVID uint32
 
 	for r := range results {
+		vid := nextVID
+		nextVID++
+
 		if existing != nil {
 			if existNode, ok := existing.NodeByPath(r.RelPath); ok {
 				if existNode.MerkleHash == r.MerkleHash {
+					// Re-add the existing vector under the new sequential VID.
+					if existing.Vector != nil {
+						if vec, ok := existing.Vector.Get(uint64(existNode.VectorID)); ok {
+							_ = idx.Add(uint64(vid), vec)
+						}
+					}
 					newStore.AddNode(store.Node{
 						RelPath:    r.RelPath,
 						MerkleHash: r.MerkleHash,
-						VectorID:   existNode.VectorID,
+						VectorID:   vid,
 						MTime:      existNode.MTime,
 					})
 					skipped++
@@ -117,8 +126,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
-		vid := nextVID
-		nextVID++
+
 		if r.Vector != nil {
 			_ = idx.Add(uint64(vid), r.Vector)
 		}
