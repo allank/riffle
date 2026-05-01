@@ -80,15 +80,22 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Build VectorID → Node lookup map (positional index is unreliable after incremental re-index)
+	vidToNode := make(map[uint32]store.Node, len(s.Nodes))
+	for _, n := range s.Nodes {
+		vidToNode[n.VectorID] = n
+	}
+
 	var results []output.QueryResult
 	for _, h := range hits {
 		if float64(h.Score) < threshold {
 			continue
 		}
-		if int(h.ID) >= len(s.Nodes) {
+		node, ok := vidToNode[uint32(h.ID)]
+		if !ok {
 			continue
 		}
-		path := s.Nodes[h.ID].RelPath
+		path := node.RelPath
 		if !relative {
 			path = filepath.Join(indexRoot, path)
 		}
