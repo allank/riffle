@@ -4,47 +4,74 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	tea "github.com/charmbracelet/bubbletea"
+	"sync"
+	"time"
 )
 
-// ProgressMsg is sent to the Bubble Tea model to update counts.
-type ProgressMsg struct {
-	Changed int
-	Skipped int
-	Total   int
+// RenderProgress returns the 3-line progress string.
+func RenderProgress(root string, exts []string, total, changed, skipped int, elapsed float64) string {
+	done := changed + skipped
+	extStr := strings.Join(exts, ",")
+	if total > 0 {
+		pct := done * 100 / total
+		bar := progressBar(pct, 24)
+		return fmt.Sprintf(
+			" Indexing %s  [ext: %s]\n %s  %3d%%  %d / %d dirs\n Changed: %d   Skipped: %d   Elapsed: %.1fs",
+			root, extStr, bar, pct, done, total, changed, skipped, elapsed,
+		)
+	}
+	return fmt.Sprintf(
+		" Indexing %s  [ext: %s]\n %d dirs processed\n Changed: %d   Skipped: %d   Elapsed: %.1fs",
+		root, extStr, done, changed, skipped, elapsed,
+	)
 }
 
-type progressModel struct {
-	changed int
-	skipped int
-	total   int
-}
+// StartProgress starts a ticker that overwrites a 3-line progress display on w every 250ms.
+// getChanged and getSkipped are called on each tick to read the current counts.
+// Returns a stop function; call it when indexing is done to render the final state.
+func StartProgress(w io.Writer, root string, exts []string, total int, start time.Time,
+	getChanged, getSkipped func() int) func() {
 
-func (m progressModel) Init() tea.Cmd { return nil }
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
 
-func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case ProgressMsg:
-		m.changed = msg.Changed
-		m.skipped = msg.Skipped
-		m.total = msg.Total
-	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+	var mu sync.Mutex
+	linesWritten := 0
+
+	render := func() {
+		c, s := getChanged(), getSkipped()
+		text := RenderProgress(root, exts, total, c, s, time.Since(start).Seconds())
+		if linesWritten > 0 {
+			fmt.Fprintf(w, "\033[%dA", linesWritten) // cursor up
 		}
+		fmt.Fprint(w, text)
+		linesWritten = strings.Count(text, "\n") + 1
 	}
-	return m, nil
-}
 
-func (m progressModel) View() string {
-	pct := 0
-	if m.total > 0 {
-		pct = (m.changed + m.skipped) * 100 / m.total
+	go func() {
+		defer close(doneCh)
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				mu.Lock()
+				render()
+				mu.Unlock()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(stopCh)
+		<-doneCh
+		mu.Lock()
+		render() // final render with actual end-state counts
+		fmt.Fprintln(w)
+		mu.Unlock()
 	}
-	bar := progressBar(pct, 24)
-	return fmt.Sprintf("\r  Indexing... %s %3d%%  Changed: %d  Skipped: %d",
-		bar, pct, m.changed, m.skipped)
 }
 
 func progressBar(pct, width int) string {
@@ -58,10 +85,4 @@ func progressBar(pct, width int) string {
 		}
 	}
 	return sb.String()
-}
-
-// WriteProgress writes a simple non-interactive progress line to w.
-// Used as the non-TTY fallback when Bubble Tea is not running interactively.
-func WriteProgress(w io.Writer, changed, skipped int) {
-	fmt.Fprintf(w, "\r  Changed: %d   Skipped: %d  ", changed, skipped)
 }

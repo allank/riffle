@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -68,7 +69,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	defer emb.Close()
 
-	// Load existing store for incremental hashing
+	// Load existing store for incremental hashing.
 	var existing *store.Store
 	if !full {
 		if idx, err := vector.New(384, 0); err == nil {
@@ -96,17 +97,17 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	newStore.Vector = idx
 
-	var changed, skipped int
+	// Atomic counters so the progress ticker goroutine can read them safely.
+	var changed, skipped atomic.Int64
 	var nextVID uint32
 
-	for r := range results {
+	processOne := func(r walker.Result) {
 		vid := nextVID
 		nextVID++
 
 		if existing != nil {
 			if existNode, ok := existing.NodeByPath(r.RelPath); ok {
 				if existNode.MerkleHash == r.MerkleHash {
-					// Re-add the existing vector under the new sequential VID.
 					if existing.Vector != nil {
 						if vec, ok := existing.Vector.Get(uint64(existNode.VectorID)); ok {
 							_ = idx.Add(uint64(vid), vec)
@@ -118,11 +119,8 @@ func runIndex(cmd *cobra.Command, args []string) error {
 						VectorID:   vid,
 						MTime:      existNode.MTime,
 					})
-					skipped++
-					if pretty {
-						output.WriteProgress(os.Stderr, changed, skipped)
-					}
-					continue
+					skipped.Add(1)
+					return
 				}
 			}
 		}
@@ -135,16 +133,33 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			MerkleHash: r.MerkleHash,
 			VectorID:   vid,
 		})
-		changed++
-		if pretty {
-			output.WriteProgress(os.Stderr, changed, skipped)
-		}
+		changed.Add(1)
 	}
-	for err := range errs {
-		return err
-	}
+
 	if pretty {
-		fmt.Fprintln(os.Stderr)
+		total := w.Count(cmd.Context())
+		stopProgress := output.StartProgress(os.Stderr, root, cfg.Ext, total, start,
+			func() int { return int(changed.Load()) },
+			func() int { return int(skipped.Load()) },
+		)
+		for r := range results {
+			processOne(r)
+		}
+		var walkErr error
+		for e := range errs {
+			walkErr = e
+		}
+		stopProgress()
+		if walkErr != nil {
+			return walkErr
+		}
+	} else {
+		for r := range results {
+			processOne(r)
+		}
+		for err := range errs {
+			return err
+		}
 	}
 
 	if err := newStore.Save(indexPath); err != nil {
@@ -152,6 +167,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	dur := time.Since(start).Seconds()
-	output.WriteIndexLLM(os.Stdout, root, changed, skipped, cfg.Ext, dur)
+	output.WriteIndexLLM(os.Stdout, root, int(changed.Load()), int(skipped.Load()), cfg.Ext, dur)
 	return nil
 }
