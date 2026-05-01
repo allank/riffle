@@ -262,22 +262,73 @@ Memory footprint at scale:
 
 ## Building from Source
 
+### Prerequisites
+
+- Go 1.22+
+- A C compiler (`gcc` or `clang`) — required for the ONNX Runtime CGo bindings
+- ONNX Runtime shared library:
+  - macOS: `brew install onnxruntime`
+  - Linux: download from the [ONNX Runtime releases](https://github.com/microsoft/onnxruntime/releases) and place `libonnxruntime.so` somewhere on `LD_LIBRARY_PATH`
+
+### 1. Fetch the embedding model (one-time)
+
 ```bash
-# Requirements: Go 1.22+, C compiler, ONNX Runtime shared library
-# macOS: brew install onnxruntime
-# Linux: see https://github.com/microsoft/onnxruntime/releases
-
-# Download the embedding model (~90MB, one-time):
 make fetch-model
+```
 
-# Build development binary (dynamically links ONNX Runtime):
+This downloads `all-MiniLM-L6-v2` (~90MB ONNX model) and its tokenizer from HuggingFace into:
+
+```
+internal/embedder/model/model.onnx
+internal/tokenizer/data/tokenizer.json
+```
+
+Both paths are gitignored. They must be present before any build.
+
+### 2. Dev build (dynamically links ONNX Runtime)
+
+```bash
 go build -o riffle .
+# or
+make build
+```
 
-# Build release binary (embeds model into binary, ~110MB):
+The dev binary does **not** embed the model. You must tell it where the files are at runtime via environment variables:
+
+```bash
+export RIFFLE_MODEL_PATH=internal/embedder/model/model.onnx
+export RIFFLE_TOKENIZER_PATH=internal/tokenizer/data/tokenizer.json
+./riffle index ~/vault
+```
+
+### 3. Release build (model embedded in binary)
+
+```bash
 make build-release
 ```
 
-The model and tokenizer files are downloaded to `internal/embedder/model/` and `internal/tokenizer/data/` respectively. These are gitignored and must be present before building.
+This compiles with `-tags embedmodel`, which activates `//go:embed` directives for the model and tokenizer files. The result is a single self-contained binary (~110MB) that requires no environment variables and no external files at runtime.
+
+```bash
+./riffle index ~/vault   # just works, no env vars needed
+```
+
+### Versioning
+
+The version string is injected at build time from the current git tag:
+
+```bash
+./riffle --version
+# riffle v1.0.0
+```
+
+Untagged builds report the nearest tag with a commit suffix (e.g. `v1.0.0-3-gabcdef1`) or `dev` if there are no tags. To cut a release:
+
+```bash
+make tag VERSION=v1.0.0   # creates an annotated git tag
+git push origin v1.0.0
+make build-release
+```
 
 ---
 
