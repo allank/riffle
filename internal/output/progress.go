@@ -42,7 +42,8 @@ func StartProgress(w io.Writer, root string, exts []string, total int, start tim
 		c, s := getChanged(), getSkipped()
 		text := RenderProgress(root, exts, total, c, s, time.Since(start).Seconds())
 		if linesWritten > 0 {
-			fmt.Fprintf(w, "\033[%dA", linesWritten) // cursor up
+			// cursor up N rows, carriage-return to col 0, erase to end of screen
+			fmt.Fprintf(w, "\033[%dA\r\033[J", linesWritten)
 		}
 		fmt.Fprint(w, text)
 		linesWritten = strings.Count(text, "\n") + 1
