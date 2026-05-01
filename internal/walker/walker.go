@@ -171,6 +171,37 @@ func (w *Walker) processDir(absPath, relPath string) Result {
 	}
 }
 
+// Count returns the number of indexable directories without embedding.
+// Used by the --pretty progress bar to show a completion percentage.
+func (w *Walker) Count(ctx context.Context) int {
+	var n int
+	filepath.WalkDir(w.cfg.Root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(w.cfg.Root, path)
+		if rel == "." {
+			return nil
+		}
+		name := d.Name()
+		if hardExcludes[name] || w.isExcluded(name) {
+			return filepath.SkipDir
+		}
+		depth := strings.Count(rel, string(os.PathSeparator)) + 1
+		if w.cfg.MaxDepth > 0 && depth > w.cfg.MaxDepth {
+			return filepath.SkipDir
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		n++
+		return nil
+	})
+	return n
+}
+
 func (w *Walker) isExcluded(name string) bool {
 	for _, pat := range w.cfg.Excludes {
 		if matched, _ := filepath.Match(pat, name); matched {
