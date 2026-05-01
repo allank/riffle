@@ -61,23 +61,27 @@ func (w *Walker) Walk(ctx context.Context) (<-chan Result, <-chan error) {
 
 		err := filepath.WalkDir(w.cfg.Root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				return nil // skip unreadable entries
-			}
-			if !d.IsDir() {
 				return nil
 			}
 
-			// Symlink cycle detection
+			// Handle symlinks: WalkDir uses Lstat so symlinks appear as non-dirs.
 			if d.Type()&fs.ModeSymlink != 0 {
 				info, statErr := os.Stat(path) // follow the symlink
 				if statErr != nil {
 					return nil
 				}
+				if !info.IsDir() {
+					return nil // symlink to file, skip
+				}
+				// Symlink to directory: check for cycles via inode
 				if st, ok := info.Sys().(*syscall.Stat_t); ok {
 					if _, loaded := w.visited.LoadOrStore(st.Ino, struct{}{}); loaded {
 						return filepath.SkipDir
 					}
 				}
+				// Fall through to process as a directory
+			} else if !d.IsDir() {
+				return nil
 			}
 
 			rel, _ := filepath.Rel(w.cfg.Root, path)
@@ -102,7 +106,12 @@ func (w *Walker) Walk(ctx context.Context) (<-chan Result, <-chan error) {
 			}
 
 			wg.Add(1)
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				wg.Done()
+				return ctx.Err()
+			}
 			go func(absPath, relPath string) {
 				defer wg.Done()
 				defer func() { <-sem }()
