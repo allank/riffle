@@ -3,6 +3,7 @@
 package main_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,8 +19,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const watchTestAddr = "127.0.0.1:17424"
 
 func waitForHealth(t *testing.T, addr string, timeout time.Duration) {
 	t.Helper()
@@ -61,7 +60,9 @@ func getStatusBuiltTime(t *testing.T, addr string) string {
 	item := content[0].(map[string]any)
 	var st map[string]any
 	require.NoError(t, json.Unmarshal([]byte(item["text"].(string)), &st))
-	return st["built"].(string)
+	built, ok := st["built"].(string)
+	require.True(t, ok, "expected built field to be a string")
+	return built
 }
 
 func TestWatchEndToEnd(t *testing.T) {
@@ -77,20 +78,48 @@ func TestWatchEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Start riffle watch in background.
-	watchCmd := exec.CommandContext(ctx, bin, "watch", vault, "--listen", watchTestAddr)
+	// Use :0 so the OS picks a free port, avoiding conflicts in parallel runs.
+	watchCmd := exec.CommandContext(ctx, bin, "watch", vault, "--listen", "127.0.0.1:0")
 	watchCmd.Env = env
+
 	var watchOut bytes.Buffer
-	watchCmd.Stdout = &watchOut
+	stdoutPipe, err := watchCmd.StdoutPipe()
+	require.NoError(t, err)
 	watchCmd.Stderr = &watchOut
 	require.NoError(t, watchCmd.Start())
 	defer watchCmd.Process.Signal(os.Interrupt)
 
-	// Wait for the server to be ready.
-	waitForHealth(t, watchTestAddr, 30*time.Second)
+	// Drain stdout, buffer it, and extract the listen address from the startup log line.
+	// Startup format: watching path=<path> listen=<addr> mode=<mode>
+	addrCh := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			watchOut.WriteString(line + "\n")
+			for _, field := range strings.Fields(line) {
+				if strings.HasPrefix(field, "listen=") {
+					select {
+					case addrCh <- strings.TrimPrefix(field, "listen="):
+					default:
+					}
+				}
+			}
+		}
+	}()
+
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for riffle watch startup log")
+	}
+
+	// Wait for the server to be fully ready.
+	waitForHealth(t, addr, 10*time.Second)
 
 	// 1. /health returns ok=true, mode=events.
-	resp, err := http.Get("http://" + watchTestAddr + "/health")
+	resp, err := http.Get("http://" + addr + "/health")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	var health map[string]any
@@ -100,7 +129,7 @@ func TestWatchEndToEnd(t *testing.T) {
 	assert.Equal(t, "events", health["mode"])
 
 	// 2. riffle_status via MCP includes mode and dir count.
-	statusResult := mcpCall(t, watchTestAddr, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"riffle_status","arguments":{}}}`)
+	statusResult := mcpCall(t, addr, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"riffle_status","arguments":{}}}`)
 	assert.Nil(t, statusResult["error"])
 	rpcResult := statusResult["result"].(map[string]any)
 	content := rpcResult["content"].([]any)
@@ -111,7 +140,7 @@ func TestWatchEndToEnd(t *testing.T) {
 	assert.Greater(t, st["dirs"].(float64), float64(0))
 
 	// 3. riffle_query returns results.
-	queryResult := mcpCall(t, watchTestAddr, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"riffle_query","arguments":{"q":"OAuth token authentication","top":5}}}`)
+	queryResult := mcpCall(t, addr, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"riffle_query","arguments":{"q":"OAuth token authentication","top":5}}}`)
 	assert.Nil(t, queryResult["error"])
 	qContent := queryResult["result"].(map[string]any)["content"].([]any)
 	qItem := qContent[0].(map[string]any)
@@ -127,7 +156,7 @@ func TestWatchEndToEnd(t *testing.T) {
 	assert.True(t, found, "oauth2 directory should appear in OAuth query results, got: %v", queryResults)
 
 	// 4. Record current built time, then modify a file and wait for re-index.
-	builtBefore := getStatusBuiltTime(t, watchTestAddr)
+	builtBefore := getStatusBuiltTime(t, addr)
 
 	require.NoError(t, os.WriteFile(
 		filepath.Join(vault, "security/oauth2/notes.md"),
@@ -139,7 +168,7 @@ func TestWatchEndToEnd(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	reindexed := false
 	for time.Now().Before(deadline) {
-		builtAfter := getStatusBuiltTime(t, watchTestAddr)
+		builtAfter := getStatusBuiltTime(t, addr)
 		if builtAfter != builtBefore {
 			reindexed = true
 			break
