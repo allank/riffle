@@ -27,10 +27,13 @@ func waitForHealth(t *testing.T, addr string, timeout time.Duration) {
 	for time.Now().Before(deadline) {
 		resp, err := http.Get("http://" + addr + "/health")
 		if err == nil && resp.StatusCode == 200 {
+			var h map[string]any
+			if json.NewDecoder(resp.Body).Decode(&h) == nil && h["ok"] == true {
+				resp.Body.Close()
+				return
+			}
 			resp.Body.Close()
-			return
-		}
-		if resp != nil {
+		} else if resp != nil {
 			resp.Body.Close()
 		}
 		time.Sleep(100 * time.Millisecond)
