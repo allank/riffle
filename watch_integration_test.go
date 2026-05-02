@@ -89,15 +89,14 @@ func TestWatchEndToEnd(t *testing.T) {
 	require.NoError(t, watchCmd.Start())
 	defer watchCmd.Process.Signal(os.Interrupt)
 
-	// Drain stdout, buffer it, and extract the listen address from the startup log line.
+	// Scan stdout for the startup log line to get the actual listen address.
 	// Startup format: watching path=<path> listen=<addr> mode=<mode>
+	// Stderr is already captured in watchOut for diagnostics.
 	addrCh := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdoutPipe)
 		for scanner.Scan() {
-			line := scanner.Text()
-			watchOut.WriteString(line + "\n")
-			for _, field := range strings.Fields(line) {
+			for _, field := range strings.Fields(scanner.Text()) {
 				if strings.HasPrefix(field, "listen=") {
 					select {
 					case addrCh <- strings.TrimPrefix(field, "listen="):

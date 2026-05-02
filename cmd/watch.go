@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -52,7 +53,10 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}
 	defer emb.Close()
 
-	mgr := indexer.New(root, emb)
+	mgr := indexer.New(root, emb, indexer.Options{
+		Excludes: cfg.Exclude,
+		MaxDepth: cfg.Depth,
+	})
 	if err := mgr.Load(); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("load index: %w", err)
@@ -78,6 +82,11 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("start MCP server: %w", err)
 	}
 
+	if host, _, err := net.SplitHostPort(srv.Addr()); err == nil {
+		if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+			log.Printf("warn listen=%s auth=none network_accessible=true", srv.Addr())
+		}
+	}
 	fmt.Printf("watching path=%s listen=%s mode=%s\n", root, srv.Addr(), w.Mode())
 
 	sighup := make(chan os.Signal, 1)

@@ -32,6 +32,12 @@ type Status struct {
 	Built string
 }
 
+// Options holds optional walker settings for the Manager.
+type Options struct {
+	Excludes []string
+	MaxDepth int
+}
+
 // Manager holds the in-memory index and coordinates reads and writes via RWMutex.
 type Manager struct {
 	mu        sync.RWMutex
@@ -39,15 +45,22 @@ type Manager struct {
 	root      string
 	indexPath string
 	emb       embedder.Embedder
+	excludes  []string
+	maxDepth  int
 }
 
 // New creates a Manager for the vault at root. Call Load or Reindex before querying.
-func New(root string, emb embedder.Embedder) *Manager {
-	return &Manager{
+func New(root string, emb embedder.Embedder, opts ...Options) *Manager {
+	m := &Manager{
 		root:      root,
 		indexPath: filepath.Join(root, ".riffle", "index.bin"),
 		emb:       emb,
 	}
+	if len(opts) > 0 {
+		m.excludes = opts[0].Excludes
+		m.maxDepth = opts[0].MaxDepth
+	}
+	return m
 }
 
 // Load reads the existing index from disk into memory.
@@ -91,6 +104,8 @@ func (m *Manager) Reindex(ctx context.Context, full bool) error {
 	wCfg := walker.Config{
 		Root:        m.root,
 		Extensions:  exts,
+		Excludes:    m.excludes,
+		MaxDepth:    m.maxDepth,
 		Concurrency: runtime.NumCPU(),
 	}
 	w := walker.New(wCfg, m.emb)
