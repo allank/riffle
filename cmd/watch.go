@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -53,7 +54,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 	mgr := indexer.New(root, emb)
 	if err := mgr.Load(); err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("load index: %w", err)
 		}
 		log.Println("No existing index — building initial index...")
