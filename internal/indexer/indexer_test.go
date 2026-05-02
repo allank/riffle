@@ -3,6 +3,7 @@ package indexer_test
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,7 +49,7 @@ func TestManagerReindex(t *testing.T) {
 	require.NoError(t, mgr.Reindex(context.Background(), false))
 
 	st := mgr.Status()
-	assert.Equal(t, 4, st.Dirs)
+	assert.Equal(t, 4, st.Dirs) // 2 container dirs (security, projects) + 2 leaf dirs with .md files
 	assert.Equal(t, []string{".md"}, st.Ext)
 	assert.Equal(t, "all-MiniLM-L6-v2", st.Model)
 	assert.NotEmpty(t, st.Built)
@@ -98,5 +99,5 @@ func TestManagerLoadMissing(t *testing.T) {
 	vault := t.TempDir()
 	mgr := indexer.New(vault, &mockEmbedder{})
 	err := mgr.Load()
-	assert.Error(t, err) // index doesn't exist yet
+	assert.True(t, errors.Is(err, os.ErrNotExist), "expected ErrNotExist, got: %v", err)
 }
