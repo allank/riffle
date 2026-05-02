@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,10 +14,6 @@ import (
 	"github.com/allank/riffle/internal/vector"
 	"github.com/allank/riffle/internal/walker"
 )
-
-// emptyDirHash is the MerkleHash produced by a directory with no matching files
-// (sha256 of empty input, same as merkle.DirHash(nil)).
-var emptyDirHash = sha256.Sum256(nil)
 
 // QueryResult is one hit from a semantic search.
 type QueryResult struct {
@@ -112,11 +107,6 @@ func (m *Manager) Reindex(ctx context.Context, full bool) error {
 	var nextVID uint32
 
 	for r := range results {
-		// Skip directories that contain no matching files.
-		if r.MerkleHash == emptyDirHash {
-			continue
-		}
-
 		vid := nextVID
 		nextVID++
 

@@ -48,7 +48,7 @@ func TestManagerReindex(t *testing.T) {
 	require.NoError(t, mgr.Reindex(context.Background(), false))
 
 	st := mgr.Status()
-	assert.Equal(t, 2, st.Dirs)
+	assert.Equal(t, 4, st.Dirs)
 	assert.Equal(t, []string{".md"}, st.Ext)
 	assert.Equal(t, "all-MiniLM-L6-v2", st.Model)
 	assert.NotEmpty(t, st.Built)
