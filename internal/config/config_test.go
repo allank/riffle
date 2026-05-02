@@ -42,3 +42,24 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 5, cfg.Top)
 }
+
+func TestWatchDefaults(t *testing.T) {
+	cfg := config.Defaults()
+	assert.Equal(t, "127.0.0.1:7424", cfg.WatchListen)
+	assert.Equal(t, 500, cfg.WatchDebounceMs)
+}
+
+func TestWatchLoadFromFile(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(f, []byte(`
+[watch]
+listen = "0.0.0.0:9000"
+debounce_ms = 250
+`), 0644))
+
+	cfg, err := config.Load(f)
+	require.NoError(t, err)
+	assert.Equal(t, "0.0.0.0:9000", cfg.WatchListen)
+	assert.Equal(t, 250, cfg.WatchDebounceMs)
+}

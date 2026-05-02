@@ -8,14 +8,16 @@ import (
 )
 
 type Config struct {
-	Top         int
-	Format      string
-	Pretty      bool
-	Relative    bool
-	Ext         []string
-	Exclude     []string
-	Depth       int
-	Concurrency int
+	Top             int
+	Format          string
+	Pretty          bool
+	Relative        bool
+	Ext             []string
+	Exclude         []string
+	Depth           int
+	Concurrency     int
+	WatchListen     string
+	WatchDebounceMs int
 }
 
 type tomlFile struct {
@@ -31,17 +33,23 @@ type tomlFile struct {
 		Depth       int      `toml:"depth"`
 		Concurrency int      `toml:"concurrency"`
 	} `toml:"index"`
+	Watch struct {
+		Listen     string `toml:"listen"`
+		DebounceMs int    `toml:"debounce_ms"`
+	} `toml:"watch"`
 }
 
 func Defaults() Config {
 	return Config{
-		Top:         5,
-		Format:      "plain",
-		Pretty:      false,
-		Relative:    true,
-		Ext:         []string{".md"},
-		Depth:       0,
-		Concurrency: 0,
+		Top:             5,
+		Format:          "plain",
+		Pretty:          false,
+		Relative:        true,
+		Ext:             []string{".md"},
+		Depth:           0,
+		Concurrency:     0,
+		WatchListen:     "127.0.0.1:7424",
+		WatchDebounceMs: 500,
 	}
 }
 
@@ -74,6 +82,12 @@ func Load(path string) (Config, error) {
 	}
 	if tf.Index.Concurrency != 0 {
 		cfg.Concurrency = tf.Index.Concurrency
+	}
+	if tf.Watch.Listen != "" {
+		cfg.WatchListen = tf.Watch.Listen
+	}
+	if tf.Watch.DebounceMs != 0 {
+		cfg.WatchDebounceMs = tf.Watch.DebounceMs
 	}
 	return cfg, nil
 }
