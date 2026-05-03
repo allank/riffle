@@ -96,6 +96,114 @@ With `--pretty`:
 
 ---
 
+### `riffle watch <path>`
+
+Starts a foreground daemon that watches `<path>` for filesystem changes and automatically re-indexes on change. Also exposes a Model Context Protocol (MCP) Streamable HTTP server so LLM agents can query the live index directly.
+
+```bash
+riffle watch ~/vault
+```
+
+On startup, loads the existing index from `<path>/.riffle/index.bin`. If no index exists, performs a full initial index first. Once running:
+
+```
+watching path=/home/user/vault listen=127.0.0.1:7424 mode=events
+```
+
+**File changes** are debounced with a 500ms quiet window before triggering a re-index. Only directories whose Merkle hash has changed are re-embedded — the same incremental logic as `riffle index`.
+
+**MCP server** listens on `127.0.0.1:7424` (configurable) and exposes two tools:
+
+- **`riffle_query`** — find semantically relevant directories for a natural-language query
+- **`riffle_status`** — return index statistics and watcher health (including `mode: events|polling`)
+
+**Health endpoint** — `GET /health` for liveness checks from scripts, launchd, and systemd:
+```json
+{ "ok": true, "watching": "/home/user/vault", "mode": "events" }
+```
+
+**Watcher modes:**
+
+| Mode | Meaning |
+|---|---|
+| `events` | Kernel event subscription active (inotify / FSEvents); changes delivered in real time |
+| `polling` | Subscription lost; watcher polls every 30 seconds |
+
+If the event subscription is lost, the daemon logs a warning and falls back to polling automatically — no restart needed.
+
+**Signals:**
+- `SIGINT` / `SIGTERM` — graceful shutdown: finish any in-progress re-index, write the index, exit 0
+- `SIGHUP` — force a full re-index (equivalent to `riffle index --full`)
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--listen <addr:port>` | `127.0.0.1:7424` | MCP server bind address |
+
+**MCP tool schemas:**
+
+`riffle_query`:
+```json
+{
+  "q":         { "type": "string",  "description": "Natural-language search query" },
+  "top":       { "type": "integer", "default": 5 },
+  "threshold": { "type": "number",  "default": 0.0, "description": "Minimum similarity score (0.0–1.0)" }
+}
+```
+
+`riffle_status`: no parameters — returns index stats plus current watcher `mode`.
+
+**No daemonisation.** `riffle watch` is a foreground process. For background operation, use your OS process supervisor. Sample unit files:
+
+<details>
+<summary>macOS launchd plist</summary>
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>         <string>com.riffle.watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/riffle</string>
+    <string>watch</string>
+    <string>/Users/you/vault</string>
+  </array>
+  <key>RunAtLoad</key>     <true/>
+  <key>KeepAlive</key>     <true/>
+  <key>StandardOutPath</key> <string>/tmp/riffle.log</string>
+  <key>StandardErrorPath</key> <string>/tmp/riffle.log</string>
+</dict>
+</plist>
+```
+
+Save to `~/Library/LaunchAgents/com.riffle.watch.plist` and run `launchctl load ~/Library/LaunchAgents/com.riffle.watch.plist`.
+</details>
+
+<details>
+<summary>Linux systemd unit</summary>
+
+```ini
+[Unit]
+Description=Riffle vault watcher
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/riffle watch /home/you/vault
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
+```
+
+Save to `~/.config/systemd/user/riffle-watch.service` and run `systemctl --user enable --now riffle-watch`.
+</details>
+
+---
+
 ### `riffle query <text>`
 
 Finds the most semantically relevant directories for a natural-language query. Auto-discovers the nearest `.riffle` index by walking up from CWD.
@@ -201,6 +309,10 @@ exclude = ["__pycache__", ".DS_Store", ".trash"]
 ext = [".md"]
 depth = 0           # 0 = unlimited
 concurrency = 0     # 0 = NumCPU
+
+[watch]
+listen      = "127.0.0.1:7424"   # bind address; "0.0.0.0:7424" for network access
+debounce_ms = 500                 # quiet window before triggering re-index after FS events
 ```
 
 The following directories are **always excluded** regardless of config or flags:
@@ -340,7 +452,7 @@ make build-release
 - Homebrew distribution tap
 
 ### v2.0
-- **Watch mode** — daemon that re-indexes on `inotify`/`FSEvents` file changes in real time, so the index is always current without manual invocation
+- ~~**Watch mode** — daemon that re-indexes on `inotify`/`FSEvents` file changes~~ ✓ shipped
 - **`riffle explain <path>`** — renders the folder summary that was embedded for a given path, useful for debugging why a path does or doesn't appear in results
 - **Hybrid retrieval** — term/trigram inverted index alongside the vector index; combines keyword precision with semantic recall
 - **Multi-root indexes** — query across several vaults or directory trees simultaneously
@@ -362,6 +474,9 @@ Riffle was designed and built through conversational AI — specifically through
 
 **Vector search**
 - [USearch](https://github.com/unum-cloud/usearch) — HNSW approximate nearest-neighbour index with int8 quantisation; used for indexes ≥ 2,000 directories
+
+**Watch mode**
+- [fsnotify](https://github.com/fsnotify/fsnotify) — cross-platform filesystem event notifications (inotify on Linux, FSEvents on macOS); used by `riffle watch` to trigger incremental re-indexing
 
 **CLI & terminal UI**
 - [Cobra](https://github.com/spf13/cobra) — command structure and flag parsing
