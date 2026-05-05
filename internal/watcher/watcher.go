@@ -2,11 +2,13 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -16,6 +18,17 @@ const (
 	ModeEvents  = "events"
 	ModePolling = "polling"
 )
+
+var hardExcludes = map[string]bool{
+	".git": true, "node_modules": true, ".riffle": true, ".obsidian": true,
+}
+
+// errTooManyFiles is a sentinel used to abort the WalkDir when EMFILE is hit.
+var errTooManyFiles = errors.New("too many open files")
+
+func isTooManyFiles(err error) bool {
+	return errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE)
+}
 
 // Watcher watches a directory tree for changes and sends on Notify() when a
 // re-index should be triggered. Debounces bursts of events into a single signal.
@@ -65,18 +78,33 @@ func (w *Watcher) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Add the root and all current subdirectories.
-	if err := filepath.WalkDir(w.root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
+	// Add the root and all non-excluded subdirectories.
+	// Skip directories we never index to avoid wasting file descriptors.
+	// On EMFILE (too many open files), fall back to polling rather than failing.
+	walkErr := filepath.WalkDir(w.root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
 			return nil
 		}
-		if d.IsDir() {
-			return fw.Add(path)
+		if hardExcludes[d.Name()] {
+			return filepath.SkipDir
+		}
+		if addErr := fw.Add(path); addErr != nil {
+			if isTooManyFiles(addErr) {
+				return errTooManyFiles
+			}
 		}
 		return nil
-	}); err != nil {
+	})
+	if errors.Is(walkErr, errTooManyFiles) {
 		fw.Close()
-		return err
+		log.Printf("warn too_many_open_files=true falling_back=polling interval=30s")
+		w.mode.Store(ModePolling)
+		go w.runPolling(ctx)
+		return nil
+	}
+	if walkErr != nil {
+		fw.Close()
+		return walkErr
 	}
 
 	go w.run(ctx, fw)
@@ -110,7 +138,13 @@ func (w *Watcher) run(ctx context.Context, fw *fsnotify.Watcher) {
 			// When a new directory is created, watch it immediately.
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					_ = fw.Add(event.Name)
+					if addErr := fw.Add(event.Name); addErr != nil && isTooManyFiles(addErr) {
+						log.Printf("warn too_many_open_files=true falling_back=polling interval=30s")
+						w.mode.Store(ModePolling)
+						fw.Close()
+						w.runPolling(ctx)
+						return
+					}
 				}
 			}
 			resetDebounce()
