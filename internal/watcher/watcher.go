@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ func isTooManyFiles(err error) bool {
 // re-index should be triggered. Debounces bursts of events into a single signal.
 type Watcher struct {
 	root         string
+	excludes     []string
 	debounce     time.Duration
 	pollInterval time.Duration
 	mode         atomic.Value // stores string: ModeEvents or ModePolling
@@ -41,9 +43,13 @@ type Watcher struct {
 }
 
 // New creates a Watcher for the directory at root with the given debounce window.
-func New(root string, debounce time.Duration) *Watcher {
+// excludes is a list of patterns matched against directory basenames or relative
+// paths from root (e.g. "vendor", "work/monorepo"). Matched directories and their
+// subtrees are skipped entirely — not watched and not indexed.
+func New(root string, debounce time.Duration, excludes ...string) *Watcher {
 	w := &Watcher{
 		root:         root,
+		excludes:     excludes,
 		debounce:     debounce,
 		pollInterval: 30 * time.Second,
 		notifyCh:     make(chan struct{}, 1),
@@ -70,6 +76,31 @@ func (w *Watcher) sendNotify() {
 	}
 }
 
+// isExcluded reports whether absPath should be excluded from watching.
+// A path is excluded if its basename or its path relative to root matches
+// any pattern in w.excludes (using filepath.Match glob syntax), or if the
+// relative path is equal to or a sub-path of an exclude pattern.
+func (w *Watcher) isExcluded(absPath string) bool {
+	name := filepath.Base(absPath)
+	rel, _ := filepath.Rel(w.root, absPath)
+	for _, pat := range w.excludes {
+		// Basename glob match: "vendor" or "*.gen"
+		if matched, _ := filepath.Match(pat, name); matched {
+			return true
+		}
+		// Relative path exact or prefix match: "work/monorepo"
+		cleanPat := filepath.Clean(pat)
+		if rel == cleanPat || strings.HasPrefix(rel, cleanPat+string(os.PathSeparator)) {
+			return true
+		}
+		// Relative path glob match: "work/*/vendor"
+		if matched, _ := filepath.Match(cleanPat, rel); matched {
+			return true
+		}
+	}
+	return false
+}
+
 // Start begins watching. Returns an error if the watcher cannot be initialised.
 // The watch goroutine stops when ctx is cancelled.
 func (w *Watcher) Start(ctx context.Context) error {
@@ -79,13 +110,13 @@ func (w *Watcher) Start(ctx context.Context) error {
 	}
 
 	// Add the root and all non-excluded subdirectories.
-	// Skip directories we never index to avoid wasting file descriptors.
+	// Skip hard-excluded and user-excluded dirs to conserve file descriptors.
 	// On EMFILE (too many open files), fall back to polling rather than failing.
 	walkErr := filepath.WalkDir(w.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return nil
 		}
-		if hardExcludes[d.Name()] {
+		if hardExcludes[d.Name()] || w.isExcluded(path) {
 			return filepath.SkipDir
 		}
 		if addErr := fw.Add(path); addErr != nil {
@@ -135,15 +166,17 @@ func (w *Watcher) run(ctx context.Context, fw *fsnotify.Watcher) {
 			if !ok {
 				return
 			}
-			// When a new directory is created, watch it immediately.
+			// When a new directory is created, watch it unless excluded.
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					if addErr := fw.Add(event.Name); addErr != nil && isTooManyFiles(addErr) {
-						log.Printf("warn too_many_open_files=true falling_back=polling interval=30s")
-						w.mode.Store(ModePolling)
-						fw.Close()
-						w.runPolling(ctx)
-						return
+					if !w.isExcluded(event.Name) {
+						if addErr := fw.Add(event.Name); addErr != nil && isTooManyFiles(addErr) {
+							log.Printf("warn too_many_open_files=true falling_back=polling interval=30s")
+							w.mode.Store(ModePolling)
+							fw.Close()
+							w.runPolling(ctx)
+							return
+						}
 					}
 				}
 			}

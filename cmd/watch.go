@@ -23,6 +23,7 @@ import (
 func init() {
 	rootCmd.AddCommand(watchCmd)
 	watchCmd.Flags().String("listen", "", "MCP server bind address (overrides config)")
+	watchCmd.Flags().StringSlice("exclude", nil, "Directory names or relative paths to exclude from watching and indexing")
 }
 
 var watchCmd = &cobra.Command{
@@ -46,6 +47,9 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if l, _ := cmd.Flags().GetString("listen"); l != "" {
 		listen = l
 	}
+	if ex, _ := cmd.Flags().GetStringSlice("exclude"); len(ex) > 0 {
+		cfg.Exclude = append(cfg.Exclude, ex...)
+	}
 
 	emb, err := loadEmbedder()
 	if err != nil {
@@ -68,7 +72,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}
 
 	debounce := time.Duration(cfg.WatchDebounceMs) * time.Millisecond
-	w := watcher.New(root, debounce)
+	w := watcher.New(root, debounce, cfg.Exclude...)
 
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()

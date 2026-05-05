@@ -65,6 +65,58 @@ func TestWatcherDebounce(t *testing.T) {
 	}
 }
 
+func TestWatcherExcludeBasename(t *testing.T) {
+	root := t.TempDir()
+	// Create a subdirectory that should be excluded.
+	excluded := filepath.Join(root, "monorepo")
+	require.NoError(t, os.MkdirAll(filepath.Join(excluded, "pkg"), 0755))
+	kept := filepath.Join(root, "notes")
+	require.NoError(t, os.MkdirAll(kept, 0755))
+
+	w := watcher.New(root, 50*time.Millisecond, "monorepo")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, w.Start(ctx))
+
+	// A write inside the excluded subtree should produce no notification.
+	require.NoError(t, os.WriteFile(filepath.Join(excluded, "main.go"), []byte("x"), 0644))
+	select {
+	case <-w.Notify():
+		t.Fatal("received notification for write inside excluded directory")
+	case <-time.After(300 * time.Millisecond):
+		// Good — excluded directory events are not surfaced.
+	}
+
+	// A write in a non-excluded directory should still notify.
+	require.NoError(t, os.WriteFile(filepath.Join(kept, "note.md"), []byte("x"), 0644))
+	select {
+	case <-w.Notify():
+		// Good.
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected notification for write in non-excluded directory")
+	}
+}
+
+func TestWatcherExcludeRelPath(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "work/monorepo/pkg"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "work/notes"), 0755))
+
+	w := watcher.New(root, 50*time.Millisecond, "work/monorepo")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, w.Start(ctx))
+
+	// Write inside the relative-path-excluded subtree — no notification.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "work/monorepo/main.go"), []byte("x"), 0644))
+	select {
+	case <-w.Notify():
+		t.Fatal("received notification for write inside relative-path-excluded directory")
+	case <-time.After(300 * time.Millisecond):
+		// Good.
+	}
+}
+
 func TestWatcherCancelStops(t *testing.T) {
 	dir := t.TempDir()
 	w := watcher.New(dir, 50*time.Millisecond)
