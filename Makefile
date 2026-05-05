@@ -12,15 +12,19 @@ build: fetch-model
 test:
 	$(GO) test ./...
 
-# Downloads all-MiniLM-L6-v2 ONNX model + tokenizer from HuggingFace
+# Downloads all-MiniLM-L6-v2 ONNX model + tokenizer from HuggingFace.
+# tokenizer.json is placed in both locations:
+#   internal/embedder/model/  — required by the //go:embed directive in embedded.go
+#   internal/tokenizer/data/  — required by the tokenizer package tests
 fetch-model:
-	@if [ ! -f internal/embedder/model/model.onnx ] || [ ! -f internal/tokenizer/data/tokenizer.json ]; then \
+	@if [ ! -f internal/embedder/model/model.onnx ] || [ ! -f internal/embedder/model/tokenizer.json ]; then \
 		echo "Downloading ONNX model (~90MB)..."; \
 		mkdir -p internal/embedder/model internal/tokenizer/data; \
 		curl -fsSL "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" \
 			-o internal/embedder/model/model.onnx; \
 		curl -fsSL "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json" \
-			-o internal/tokenizer/data/tokenizer.json; \
+			-o internal/embedder/model/tokenizer.json; \
+		cp internal/embedder/model/tokenizer.json internal/tokenizer/data/tokenizer.json; \
 	fi
 
 clean:
